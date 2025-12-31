@@ -27,8 +27,22 @@ class HfRetriever(BaseRetriver):
         self.context_tokenizer = AutoTokenizer.from_pretrained(self.config.document_encoder_path)
         self.question_encoder = AutoModel.from_pretrained(self.config.query_encoder_path)
         self.context_encoder = AutoModel.from_pretrained(self.config.document_encoder_path)
-        self.question_encoder.cuda()
-        self.context_encoder.cuda()
+        
+        # Auto-detect device if not provided in config
+        if hasattr(self.config, 'device') and self.config.device:
+            self.device = self.config.device
+        else:
+            # Priority: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
+            if torch.backends.mps.is_available():
+                self.device = "mps"
+            elif torch.cuda.is_available():
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+        
+        # Move models to device
+        self.question_encoder.to(self.device)
+        self.context_encoder.to(self.device)
         self.batch_size = self.config.batch_size
         self.sep="[SEP]"
         self.logger = logging.getLogger(__name__)
@@ -44,7 +58,7 @@ class HfRetriever(BaseRetriver):
                        batch_size: int = 16,
                          **kwargs) -> Union[List[Tensor], np.ndarray, Tensor]:
         with torch.no_grad():
-            tokenized_questions = self.question_tokenizer([query.text() for query in queries], padding=True, truncation=True, return_tensors='pt').to("cuda")
+            tokenized_questions = self.question_tokenizer([query.text() for query in queries], padding=True, truncation=True, return_tensors='pt').to(self.device)
             token_emb =  self.question_encoder(**tokenized_questions)
         print("token_emb",token_emb[0].shape)
         sentence_emb = self.mean_pooling(token_emb[0],tokenized_questions["attention_mask"])
@@ -70,7 +84,7 @@ class HfRetriever(BaseRetriver):
         with torch.no_grad():
             while index < len(contexts):
                 samples = contexts[index:index+self.batch_size]
-                tokenized_contexts = self.context_tokenizer(samples, padding=True, truncation=True, return_tensors='pt').to("cuda")
+                tokenized_contexts = self.context_tokenizer(samples, padding=True, truncation=True, return_tensors='pt').to(self.device)
                 token_emb =  self.context_encoder(**tokenized_contexts)
                 sentence_emb = self.mean_pooling(token_emb[0],tokenized_contexts["attention_mask"])
                 context_embeddings.append(sentence_emb)

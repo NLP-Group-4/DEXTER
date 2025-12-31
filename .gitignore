@@ -1,16 +1,29 @@
-node_modules
+# Python
 *.pyc
 __pycache__/
-/tests/corpus_utils/dataset/*
-/indices/*
-evaluation/ottqa/results
-experiments/
-indices/
-*.tsv
-dexter.egg-info/
-TATQA_colbert_docs.json
-ambigqa/
-tatqa/
-ootqa/
+*.egg-info/
 dist/
-dexter/tests/corpus_utils/dataset/finqa/
+
+# Data files (too large for GitHub)
+evaluation/data/musiqueqa/*.json
+evaluation/data/wikimultihopqa/*.json
+*.pkl
+
+# Generated results
+*.tsv
+experiment*.json
+processed_questions.pkl
+
+# System
+.DS_Store
+**/.DS_Store
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Temporary
+indices/
+experiments/

@@ -204,7 +204,8 @@ class PassageDataLoader(DataLoader):
             psg_ids = [passage.id() for passage in self.raw_data]
             tokenized_data = self.tokenizer.tokenize(input_data,
                             max_length=128,
-                            pad_to_max_length=True)
+                            padding='max_length',
+                            truncation=True)
             input_ids = {_id: _input_ids
                             for _id, _input_ids in zip(psg_ids, tokenized_data["input_ids"])}
             attention_mask = {_id: _attention_mask

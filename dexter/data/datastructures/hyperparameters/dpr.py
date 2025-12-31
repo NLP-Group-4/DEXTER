@@ -10,7 +10,8 @@ class DenseHyperParams(BaseHyperParameters):
                  learning_rate: float = 1e-5,
                  num_negative_samples: int = 5,
                  ann_search: str = "faiss_search",convert_to_tensor: bool = True, 
-                 show_progress_bar: bool = True,convert_to_numpy: bool = True, batch_size: int = 64) -> None:
+                 show_progress_bar: bool = True,convert_to_numpy: bool = True, batch_size: int = 64,
+                 device: str = None) -> None:
         super().__init__()
 
         self.query_max_length = query_max_length
@@ -23,6 +24,7 @@ class DenseHyperParams(BaseHyperParameters):
         self.show_progress_bar = show_progress_bar
         self.batch_size = batch_size
         self.convert_to_numpy = convert_to_numpy
+        self.device = device
 
     def get_all_params(self):
         config = {
@@ -35,6 +37,7 @@ class DenseHyperParams(BaseHyperParameters):
             "convert_to_tensor": self.convert_to_tensor,
             "convert_to_numpy":self.convert_to_numpy,
             "batch_size": self.batch_size,
-            "show_progress_bar": self.show_progress_bar
+            "show_progress_bar": self.show_progress_bar,
+            "device": self.device
         }
         return config
