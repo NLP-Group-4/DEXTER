@@ -7,6 +7,7 @@ Uses Ollama backend for better Mac compatibility
 
 import os
 import pandas as pd
+from pathlib import Path
 from dexter.llms.gemma_ollama_engine import GemmaOllamaEngine
 from sklearn.metrics.pairwise import cosine_similarity
 from dexter.config.constants import Split
@@ -35,6 +36,11 @@ def get_top_k_similar_instances(
 #model = SentenceTransformer("sentence-transformers/paraphrase-MiniLM-L6-v2", device="cpu")
 
 if __name__ == "__main__":
+    # Create output directory
+    output_dir = Path("results/Experiment_2")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "gemma3_oracle_retrieved_v2_ollama.tsv"
+    
     # Initialize Gemma 3 4B model via Ollama
     print("Loading Gemma 3 4B model via Ollama...")
     llm_instance = GemmaOllamaEngine(
@@ -154,7 +160,7 @@ Packers.
         
         final_questions = pd.DataFrame(question_df)
         print(f"EM {matches/(matches+mismatches):.4f} | Processed: {len(question_df['questions'])}/1200")
-        final_questions.to_csv("gemma3_oracle_retrieved_v2_ollama.tsv", sep="\t", index=False)
+        final_questions.to_csv(output_path, sep="\t", index=False)
         
         # Reset evidences for next question
         evidences = []

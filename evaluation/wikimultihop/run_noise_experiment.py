@@ -8,6 +8,7 @@ Runs sequentially for different noise levels.
 import os
 import random
 import pandas as pd
+from pathlib import Path
 from dexter.llms.gemma_ollama_engine import GemmaOllamaEngine
 from dexter.config.constants import Split
 from dexter.data.loaders.RetrieverDataset import RetrieverDataset
@@ -17,6 +18,10 @@ NOISE_LEVELS = [1, 3, 5]  # The experiment will run 3 times, once for each level
 SHUFFLE_CONTEXTS = True   # Essential to prevent positional bias
 
 if __name__ == "__main__":
+    # Create output directory
+    output_dir = Path("results/Experiment_3")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # 1. Initialize Gemma 3 4B model via Ollama
     print("Loading Gemma 3 4B model via Ollama...")
     llm_instance = GemmaOllamaEngine(
@@ -143,7 +148,8 @@ if __name__ == "__main__":
             if total_processed % 50 == 0:
                 print(f"Noise k={k_noise} | EM: {matches/total_processed:.4f} | Processed: {total_processed}/1200")
                 # Save checkpoint specific to this noise level
-                pd.DataFrame(question_df).to_csv(f"gemma3_noise_k{k_noise}.tsv", sep="\t", index=False)
+                checkpoint_path = output_dir / f"gemma3_noise_k{k_noise}.tsv"
+                pd.DataFrame(question_df).to_csv(checkpoint_path, sep="\t", index=False)
             
             # Reset for next question
             gold_evidences = []
@@ -153,6 +159,7 @@ if __name__ == "__main__":
         # Final Save for this level
         final_em = matches / len(question_df['questions'])
         print(f"FINISHED k={k_noise} | Final EM: {final_em:.4f}")
-        pd.DataFrame(question_df).to_csv(f"gemma3_noise_k{k_noise}.tsv", sep="\t", index=False)
+        final_path = output_dir / f"gemma3_noise_k{k_noise}.tsv"
+        pd.DataFrame(question_df).to_csv(final_path, sep="\t", index=False)
 
     print("\nALL EXPERIMENTS COMPLETE.")
