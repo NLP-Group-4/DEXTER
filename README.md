@@ -45,6 +45,16 @@ Injects randomly sampled irrelevant documents as noise into the LLM input contex
 - **Method**: Combines oracle contexts with k randomly sampled documents, shuffled to prevent positional bias
 - **Results**: [`results/Experiment_3/`](results/Experiment_3/)
 
+### Experiment 4: Hard Negative Injection
+**Script**: [`evaluation/wikimultihop/run_hard_negatives_experiment.py`](evaluation/wikimultihop/run_hard_negatives_experiment.py)
+
+Evaluates RAG robustness when ground-truth evidence is combined with hard negatives retrieved via dense retrieval. Unlike random noise, hard negatives are retriever-based and semantically similar to the query, making this experiment a realistic test to understand if hard negatives improve RAG performance compared to random documents.
+
+- **Model**: Gemma 3 4B (via Ollama)
+- **Hard Negative levels**: k = 1, 3, 5 hard negatives
+- **Method**: Bootstraps dense retrieval (Contriever) to build a high-recall reduced corpus, followed by final retrieval. Combines gold evidence with retrieved hard negatives, shuffled to prevent positional bias.
+- **Results**: [`results/Experiment_4/`](results/Experiment_4/)
+
 ### Analysis: Extended Churn Analysis
 **Script**: [`results/churn_analysis.py`](results/churn_analysis.py)
 
