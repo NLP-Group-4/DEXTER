@@ -2,38 +2,19 @@
 """
 Experiment 2: Oracle Contexts with Gemma 3 4B (Ollama Backend)
 Process first 1200 questions from dev.json using oracle (ground truth) contexts
-Uses Ollama backend for better Mac compatibility
 """
 
 import os
-import pandas as pd
+import csv
+import time
 from pathlib import Path
 from dexter.llms.gemma_ollama_engine import GemmaOllamaEngine
-from sklearn.metrics.pairwise import cosine_similarity
 from dexter.config.constants import Split
-from sentence_transformers import SentenceTransformer
 from dexter.data.loaders.RetrieverDataset import RetrieverDataset
-from torch import Tensor
-from typing import List, Dict
+from dexter.utils.metrics.ExactMatch import ExactMatch
 
-"""
-def get_top_k_similar_instances(
-    sentence: str, data_emb: Tensor, data: List[Dict],
-    k: int, threshold: float
-) -> List[Dict]:
-    sent_emb = model.encode(sentence)
-    text_sims = cosine_similarity(data_emb, [sent_emb]).tolist()
-    results_sims = zip(range(len(text_sims)), text_sims)
-    sorted_similarities = sorted(
-        results_sims, key=lambda x: x[1], reverse=True)
-    top_questions = []
-    for idx, item in sorted_similarities[:k]:
-        if item[0] > threshold:
-            top_questions.append(list(data)[idx])
-    return top_questions
-"""
-
-#model = SentenceTransformer("sentence-transformers/paraphrase-MiniLM-L6-v2", device="cpu")
+# Initialize ExactMatch metric
+em_metric = ExactMatch()
 
 if __name__ == "__main__":
     # Create output directory
@@ -45,7 +26,7 @@ if __name__ == "__main__":
     print("Loading Gemma 3 4B model via Ollama...")
     llm_instance = GemmaOllamaEngine(
         data="",
-        model_name="gemma3:4b",  # Ollama model name
+        model_name="gemma3:4b", 
         temperature=0.3,
         max_new_tokens=256
     )
@@ -63,28 +44,38 @@ if __name__ == "__main__":
     queries, qrels, corpus_list = loader.qrels()
     raw_data = loader.base_dataset.raw_data
     
-    # Limit to first 1200 questions
     print(f"Total questions in dataset: {len(set([row.question.id() for row in raw_data]))}")
-    unique_question_ids = []
+    unique_question_ids = set()
     limited_raw_data = []
-    for row in raw_data:
-        if row.question.id() not in unique_question_ids:
-            if len(unique_question_ids) >= 1200:
-                break
-            unique_question_ids.append(row.question.id())
-        if len(unique_question_ids) <= 1200:
-            limited_raw_data.append(row)
     
+    for row in raw_data:
+        qid = row.question.id()
+        # Add ID if we haven't reached the limit
+        if qid not in unique_question_ids:
+            if len(unique_question_ids) >= 1200:
+                pass # Don't break yet, we need to finish the current ID's evidences if any
+            else:
+                unique_question_ids.add(qid)
+        
+        # If this row belongs to one of our selected 1200 questions, keep it
+        if qid in unique_question_ids:
+            limited_raw_data.append(row)
+            
     raw_data = limited_raw_data
     print(f"Processing first 1200 questions (total samples with evidences: {len(raw_data)})")
     
+    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f, delimiter='\t')
+        writer.writerow(["questions", "answers", "gold"])
+
     system_prompt = "Follow the given examples and Given the question and context output final answer for the question using information in the context and give answer in form of  [Final Answer]: \n"
+    
     matches = 0
     mismatches = 0
     ids = []
     evidences = []
-    question_df = {"questions": [], "answers": [], "gold": []}
-    
+    processed_count = 0
+
     for index, row in enumerate(raw_data):
         # Check if this is the last item
         is_last_item = (index + 1 >= len(raw_data))
@@ -105,11 +96,7 @@ if __name__ == "__main__":
             evidences.append(row.evidences.text())
             continue
                 
-        # Process the question (this now runs for all questions including the last one)
-        #evidence_emb = model.encode(evidences)
-        #evidences_final = get_top_k_similar_instances(
-        #    row.question.text(), evidence_emb, evidences, 3, 0.5
-        #)
+        # Process the question
         evidence_text = " ".join(evidences)
         
         user_prompt = """[Question]: When does monsoon season end in the state the area code 575 is located?
@@ -134,40 +121,53 @@ Packers.
 [Answer]: The birth country of Jayantha Ketagoda is Sri Lanka. Sri Lanka left the British Empire on February 4, 1948. So the
 [Final Answer]: February 4, 1948.\n\n """ + "Follow the above example and Given the evidence, Evidence: " + evidence_text + " \n use the information and answer the Question:" + row.question.text() + "Give answer strictly preceded by [Final Answer]:"
         
-        chain_answer = llm_instance.get_gemma_completion(system_prompt, user_prompt)
-        
-        if "not possible" in chain_answer.lower():
+        chain_answer = ""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                chain_answer = llm_instance.get_gemma_completion(system_prompt, user_prompt)
+                break # Success
+            except Exception as e:
+                print(f"Error on attempt {attempt+1}: {e}")
+                time.sleep(2) # Cooldown
+                if attempt == max_retries - 1:
+                    chain_answer = "ERROR_FAILED_INFERENCE"
+
+        # 1. Validation checks
+        if "not possible" in chain_answer.lower() or "unknown" in chain_answer.lower():
             mismatches += 1
-            evidences = []
-            continue
-        elif "unknown" in chain_answer.lower():
-            mismatches += 1
-            evidences = []
-            continue
-        elif len(chain_answer.split("[Final Answer]:")) > 1:
-            answer = chain_answer.split("[Final Answer]:")[-1]
-            print("************", answer, row.answer.text())
-            if row.answer.text().lower() in answer.lower():
+            extracted_answer = chain_answer # Save full string for debugging
+        elif "[Final Answer]:" in chain_answer:
+            extracted_answer = chain_answer.split("[Final Answer]:")[-1].strip()
+            
+            # Use ExactMatch metric from utils
+            if em_metric.evaluate(extracted_answer, row.answer.text()):
                 matches += 1
             else:
                 mismatches += 1
         else:
             mismatches += 1
+            extracted_answer = chain_answer
+
+        with open(output_path, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f, delimiter='\t')
+            # Clean strings to prevent CSV breakage
+            clean_q = row.question.text().replace('\t', ' ').replace('\n', ' ')
+            clean_a = chain_answer.replace('\t', ' ').replace('\n', ' ')
+            clean_g = row.answer.text().replace('\t', ' ').replace('\n', ' ')
+            writer.writerow([clean_q, clean_a, clean_g])
         
-        question_df["answers"].append(chain_answer)
-        question_df["questions"].append(row.question.text())
-        question_df["gold"].append(row.answer.text())
-        
-        final_questions = pd.DataFrame(question_df)
-        print(f"EM {matches/(matches+mismatches):.4f} | Processed: {len(question_df['questions'])}/1200")
-        final_questions.to_csv(output_path, sep="\t", index=False)
-        
-        # Reset evidences for next question
+        processed_count += 1
+        total_so_far = matches + mismatches
+        if total_so_far > 0:
+            print(f"EM {matches/total_so_far:.4f} | Processed: {processed_count}/1200")
+
+        # Reset evidences
         evidences = []
         
-        # Checkpoint every 50 questions
-        if len(question_df['questions']) % 50 == 0:
-            print(f"Checkpoint: {len(question_df['questions'])} questions processed")
+        if processed_count % 50 == 0:
+            print(f"Checkpoint: {processed_count} questions processed")
 
-print(f"\nCOMPLETE! Processed {len(question_df['questions'])} questions")
-print(f"Final EM: {matches/(matches+mismatches):.4f}")
+print(f"\nCOMPLETE! Processed {processed_count} questions")
+if (matches + mismatches) > 0:
+    print(f"Final EM: {matches/(matches+mismatches):.4f}")

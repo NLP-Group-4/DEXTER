@@ -1,43 +1,68 @@
 #!/usr/bin/env python3
 """
 Experiment 4: Hard Negative Injection (k = 1, 3, 5)
-
-This experiment evaluates RAG robustness when GOLD evidence is mixed with
-HARD NEGATIVES retrieved via dense retrieval (Contriever).
-
-Key Experimental Parameters:
---------------------------------------------------
-TOP_K_RETRIEVAL        = 50     # Final number of documents retrieved per query
-CANDIDATE_POOL_SIZE   = 100    # Number of candidates per query for hard-negative mining
-MAX_QUESTIONS         = 1200   # Limit on unique questions evaluated
-MAX_CORPUS_SIZE       = 10000   # Size of sampled corpus subset for efficiency
-
+Retrieves semantically similar but incorrect documents (Hard Negatives) 
+using Contriever and mixes them with Gold evidence.
 """
 
-
 import os
+import csv
+import time
 import random
-import pandas as pd
+import torch
+from pathlib import Path
+
 from dexter.llms.gemma_ollama_engine import GemmaOllamaEngine
 from dexter.config.constants import Split
 from dexter.data.loaders.RetrieverDataset import RetrieverDataset
 from dexter.retriever.dense.Contriever import Contriever
 from dexter.data.datastructures.hyperparameters.dpr import DenseHyperParams
 from dexter.utils.metrics.SimilarityMatch import DotScore
-
+from dexter.utils.metrics.ExactMatch import ExactMatch
 
 # --- CONFIGURATION ---
-NOISE_LEVELS = [1, 3, 5]  # The experiment will run 3 times, once for each level
-SHUFFLE_CONTEXTS = True   # Essential to prevent positional bias
-UNIQUE_QUESTIONS_LIMIT = 1200  # Limit to first 1200 unique questions
-MAX_CORPUS_SIZE = 10000  # Max corpus size for retrieval
-CANDIDATE_POOL_SIZE = 100  # Number of candidates to consider for hard negatives
-TOP_K_RETRIEVAL = 50  # Number of documents to retrieve per query
+NOISE_LEVELS = [1, 3, 5]
+SHUFFLE_CONTEXTS = True
 
+# Initialize ExactMatch metric
+em_metric = ExactMatch()
+UNIQUE_QUESTIONS_LIMIT = 1200 
+MAX_CORPUS_SIZE = 600000  
+TOP_K_RETRIEVAL = 20     # We only need enough to fill k=5 noise slots
 
+PROMPT_TEMPLATE = """[Question]: When does monsoon season end in the state the area code 575 is located?
+[Answer]: The area code 575 is located in New Mexico. Monsoon season in New Mexico typically ends in mid-September. So the
+[Final Answer]: mid-September.
+[Question]: What is the current official currency in the country where Ineabelle Diaz is a citizen?
+[Answer]: Ineabelle Diaz is from Peurto Rico, which is in the United States of America. The current official currency in the United
+States is the United States dollar. 
+[Final Answer]: United States dollar.
+[Question]: Where was the person who founded the American Institute of Public Opinion in 1935 born?
+[Answer]: The person who founded the American Institute of Public Opinion in 1935 is George Gallup. George Gallup was born
+in Jefferson, Iowa. 
+[Final Answer]: Jefferson.
+[Question]: What language is used by the director of Tiffany Memorandum?
+[Answer]: The director of Tiffany Memorandum is Sergio Grieco. Sergio Grieco speaks Italian.
+[Final Answer]: Italian.
+[Question]: What is the sports team the person played for who scored the first touchdown in Superbowl 1?
+[Answer]: The player that scored the first touchdown in Superbowl 1 is Max McGee. Max McGee played for the Green Bay
+Packers.
+[Final Answer]: Green Bay Packers.
+[Question]: The birth country of Jayantha Ketagoda left the British Empire when?
+[Answer]: The birth country of Jayantha Ketagoda is Sri Lanka. Sri Lanka left the British Empire on February 4, 1948. So the
+[Final Answer]: February 4, 1948.
+
+Follow the above example.
+Given the evidence, Evidence: {evidence} 
+use the information and answer the Question: {question}
+Give answer strictly preceded by [Final Answer]:"""
 
 if __name__ == "__main__":
-    # 1. Initialize Gemma 3 4B model via Ollama
+    # Setup Output
+    output_dir = Path("results/Experiment_4")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Initialize Gemma
     print("Loading Gemma 3 4B model via Ollama...")
     llm_instance = GemmaOllamaEngine(
         data="",
@@ -45,9 +70,9 @@ if __name__ == "__main__":
         temperature=0.3,
         max_new_tokens=256
     )
-    
-    # 2. Load Dataset & Corpus
-    print("Loading Dataset and Corpus...")
+
+    # 2. Load Dataset
+    print("Loading Dataset...")
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, "../../"))
     config_path = os.path.join(project_root, "evaluation", "config.ini")
@@ -56,207 +81,179 @@ if __name__ == "__main__":
         "wikimultihopqa", "wiki-musiqueqa-corpus",
         config_path, Split.DEV, tokenizer=None
     )
-
+    
+    # 3. Initialize Contriever
     print("Initializing Contriever...")
     retriever_config = DenseHyperParams(
         query_encoder_path="facebook/contriever",
         document_encoder_path="facebook/contriever",
-        batch_size=32
+        batch_size=32 
     )
-
     retriever = Contriever(retriever_config)
     similarity_measure = DotScore()
 
-    
-    # Extract corpus texts for fast sampling
-    # We create a simple list of strings from the corpus to sample hard negatives from
+    # 4. Data Prep
     queries, qrels, corpus_list = loader.qrels()
     raw_data = loader.base_dataset.raw_data
     
-    print("Extracting corpus texts for sampling...")
-
-    # Limit to first 1200 unique questions
-    unique_question_ids = []
+    # Efficient Question Filtering
+    print("Filtering questions...")
+    unique_ids = set()
     limited_raw_data = []
-    for row in raw_data:
-        if row.question.id() not in unique_question_ids:
-            if len(unique_question_ids) >= UNIQUE_QUESTIONS_LIMIT:
-                break
-            unique_question_ids.append(row.question.id())
-        limited_raw_data.append(row)
-    raw_data = limited_raw_data
-    print(f"Dataset prepared: {len(unique_question_ids)} unique questions.")
-
-    # Subsample corpus since retrieval over the full corpus is expensive
-    corpus_subset = random.sample(corpus_list, MAX_CORPUS_SIZE)
-
-    # Build a candidate pool for HARD NEGATIVES
-    # For each query, retrieve top-100 documents
-    print("Building candidate pool for hard negatives...")
     
-    # Bootstrap retrieval over the sampled corpus
-    # This step is ONLY for mining hard negatives (not final evaluation)
-    bootstrap_results = retriever.retrieve(
-        corpus_subset,
-        queries,
-        CANDIDATE_POOL_SIZE,
-        similarity_measure
-    )
-
-    # Collect all document IDs retrieved for any query
-    # These are likely hard negatives (high similarity)
-    candidate_doc_ids = set()
-
-    for qid, doc_scores in bootstrap_results.items():
-        for doc_id in doc_scores.keys():
-            candidate_doc_ids.add(str(doc_id))
-
-    # Always include gold docs
     for row in raw_data:
-        try:
-            candidate_doc_ids.add(str(row.evidences.id()))
-        except Exception:
-            for ev in row.evidences:
-                candidate_doc_ids.add(str(ev.id()))
+        qid = row.question.id()
+        if qid not in unique_ids:
+            if len(unique_ids) >= UNIQUE_QUESTIONS_LIMIT:
+                pass 
+            else:
+                unique_ids.add(qid)
+        if qid in unique_ids:
+            limited_raw_data.append(row)
+    
+    raw_data = limited_raw_data
+    print(f"Dataset prepared: {len(unique_ids)} unique questions.")
 
-    # Build the reduced corpus:
-    # Only documents that were either:
-    #   - retrieved during bootstrapping, or
-    #   - explicitly gold evidence
-    reduced_corpus = [d for d in corpus_subset if str(d.id()) in candidate_doc_ids]
-
-    print(f"Reduced corpus size: {len(reduced_corpus)}")
-
-    # Final retrieval results
+    # 5. Corpus Prep for Retrieval
+    print(f"Preparing corpus (Sampling {MAX_CORPUS_SIZE} docs)...")
+    if len(corpus_list) > MAX_CORPUS_SIZE:
+        corpus_subset = random.sample(corpus_list, MAX_CORPUS_SIZE)
+    else:
+        corpus_subset = corpus_list
+    
+    print("Mining Hard Negatives via Contriever...")
+    
+    # Build list of unique Question objects for retrieval
+    unique_questions = {}
+    for row in raw_data:
+        qid = row.question.id()
+        if qid not in unique_questions:
+            unique_questions[qid] = row.question
+    
+    target_queries = list(unique_questions.values())  # List of Question objects
+    
     retrieval_results = retriever.retrieve(
-        reduced_corpus,
-        queries,
+        corpus_subset,
+        target_queries,  # Now passing Question objects, not dict
         TOP_K_RETRIEVAL,
         similarity_measure
     )
+    print("Hard Negative Mining Complete.")
 
-
-    # 3. Main Experiment Loop (Iterate through noise levels)
+    # 7. Main Experiment Loop
     for k_noise in NOISE_LEVELS:
         print(f"\n{'='*40}")
         print(f"STARTING RUN: {k_noise} HARD NEGATIVES")
         print(f"{'='*40}")
         
+        output_file = output_dir / f"gemma3_hardneg_k{k_noise}.tsv"
+        
+        # Init CSV
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f, delimiter='\t')
+            writer.writerow(["questions", "answers", "gold", "context_used"])
+        
         matches = 0
         mismatches = 0
-        question_df = {"questions": [], "answers": [], "gold": [], "context_used": [], "noise_level": []}
+        processed_count = 0
         
-        current_question_id = None
+        current_qid = None
         gold_evidences = []
         
-        # Process questions
         for index, row in enumerate(raw_data):
-            # --- Evidence Aggregation Logic ---
-            if current_question_id is None:
-                current_question_id = row.question.id()
+            qid = row.question.id()
             
-            # Multi-hop logic: Since questions may span multiple rows (one for each gold 
-            # evidence), we aggregate gold_evidences until we encounter a new question_id.
-            if row.question.id() == current_question_id:
+            # --- Evidence Aggregation ---
+            if current_qid is None: current_qid = qid
+            
+            if qid == current_qid:
                 gold_evidences.append(row.evidences.text())
-                
-                # If next row is same question, continue collecting (don't process yet)
-                if index + 1 < len(raw_data) and raw_data[index+1].question.id() == current_question_id:
+                is_last_item = (index + 1 >= len(raw_data))
+                if not is_last_item and raw_data[index+1].question.id() == current_qid:
                     continue
             
-            # --- HARD NEGATIVE INJECTION ---
-            # 1. Extract documents retrieved by Contriever for this specific question
-            retrieved_map = retrieval_results[row.question.id()]
-
-            # 2. Filter: Keep retrieved docs ONLY if they aren't the ground truth (Gold)
-            retrieved_docs = []
-            for cid, score in retrieved_map.items():
-                match = next((d for d in reduced_corpus if str(d.id()) == str(cid)), None)
-                if match:
-                    retrieved_docs.append(match.text())
-
+            # --- HARD NEGATIVE SELECTION ---
+            # Get docs retrieved by Contriever
+            retrieved_map = retrieval_results.get(qid, {})
+            
+            # Create a set of gold texts for filtering
             gold_set = set(g.strip().lower() for g in gold_evidences)
-
+            
             hard_negatives = []
-            for doc_text in retrieved_docs:
-                if doc_text.strip().lower() not in gold_set:
-                    hard_negatives.append(doc_text)
-                if len(hard_negatives) == k_noise:
-                    break
-
-            # 3. Fallback: If Contriever didn't return enough non-gold docs, 
-            # fill the remaining slots from the general retrieval pool
-            if len(hard_negatives) < k_noise:
-                fallback = [
-                    t for t in retrieved_docs
-                    if t.strip().lower() not in gold_set
-                ]
-                if fallback:
-                    hard_negatives.extend(
-                        random.sample(
-                            fallback,
-                            min(k_noise - len(hard_negatives), len(fallback))
-                        )
-                    )
-
             
-            # Combine Gold + Hard Negatives
-            combined_contexts = gold_evidences + hard_negatives
-            
-            # Shuffle to ensure the model doesn't rely on gold being at the top
-            if SHUFFLE_CONTEXTS:
-                random.shuffle(combined_contexts)
+            # Map retrieved IDs back to text
+            # Note: retrieval_results keys are IDs, values are scores
+            for doc_id in retrieved_map.keys():
+                # Find doc in corpus
+                doc_obj = next((d for d in corpus_subset if str(d.id()) == str(doc_id)), None)
                 
-            evidence_text = " ".join(combined_contexts)
+                if doc_obj:
+                    text = doc_obj.text()
+                    # Ensure it's not the actual answer doc (Gold)
+                    if text.strip().lower() not in gold_set:
+                        hard_negatives.append(text)
+                
+                if len(hard_negatives) >= k_noise:
+                    break
+            
+            # Fallback: If Contriever failed to find enough distinct docs, fill with randoms
+            if len(hard_negatives) < k_noise:
+                remaining_needed = k_noise - len(hard_negatives)
+                random_fill = random.sample(corpus_subset, remaining_needed)
+                for d in random_fill:
+                    hard_negatives.append(d.text())
+
+            # --- COMBINE & SHUFFLE ---
+            combined_context = gold_evidences + hard_negatives
+            if SHUFFLE_CONTEXTS:
+                random.shuffle(combined_context)
+            
+            evidence_text = " ".join(combined_context)
             
             # --- INFERENCE ---
-            user_prompt = """[Few-shot examples...]
-[Question]: What is the sports team the person played for who scored the first touchdown in Superbowl 1?
-[Answer]: The player that scored the first touchdown in Superbowl 1 is Max McGee. Max McGee played for the Green Bay Packers.
-[Final Answer]: Green Bay Packers.\n\n """ + \
-            "Follow the above example and Given the evidence, Evidence: " + evidence_text + \
-            " \n use the information and answer the Question: " + row.question.text() + \
-            " Give answer strictly preceded by [Final Answer]:"
-            
-            chain_answer = llm_instance.get_gemma_completion(
-                "Follow instructions and answer based on context.", 
-                user_prompt
+            user_prompt = PROMPT_TEMPLATE.format(
+                evidence=evidence_text,
+                question=row.question.text()
             )
             
-            # --- SCORING ---
-            gold_answer = row.answer.text()
+            chain_answer = ""
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    chain_answer = llm_instance.get_gemma_completion("Follow instructions.", user_prompt)
+                    break
+                except Exception as e:
+                    print(f"Error on attempt {attempt+1}: {e}")
+                    time.sleep(2)
+                    if attempt == max_retries - 1: chain_answer = "ERROR"
+            
+            # --- SCORING (Using ExactMatch from utils) ---
+            extracted = chain_answer
             if "[Final Answer]:" in chain_answer:
-                pred_answer = chain_answer.split("[Final Answer]:")[-1].strip()
-                if gold_answer.lower() in pred_answer.lower():
-                    matches += 1
-                else:
-                    mismatches += 1
+                extracted = chain_answer.split("[Final Answer]:")[-1].strip()
+            
+            if em_metric.evaluate(extracted, row.answer.text()):
+                matches += 1
             else:
                 mismatches += 1
             
-            # Log Data
-            question_df["questions"].append(row.question.text())
-            question_df["answers"].append(chain_answer)
-            question_df["gold"].append(gold_answer)
-            question_df["context_used"].append(evidence_text)
-            question_df["noise_level"].append(k_noise)
+            # --- WRITE TO FILE ---
+            with open(output_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f, delimiter='\t')
+                clean_q = row.question.text().replace('\t', ' ').replace('\n', ' ')
+                clean_a = chain_answer.replace('\t', ' ').replace('\n', ' ')
+                clean_g = row.answer.text().replace('\t', ' ').replace('\n', ' ')
+                clean_c = evidence_text.replace('\t', ' ').replace('\n', ' ')[:5000]
+                writer.writerow([clean_q, clean_a, clean_g, clean_c])
+                
+            processed_count += 1
             
-            # Progress update
-            total_processed = len(question_df['questions'])
-            if total_processed % 50 == 0:
-                print(f"HardNeg k={k_noise} | EM: {matches/total_processed:.4f} | Processed: {total_processed}/1200")
-                # Save checkpoint specific to this noise level
-                pd.DataFrame(question_df).to_csv(f"gemma3_noise_k{k_noise}.tsv", sep="\t", index=False)
-            
-            # Reset for next question
+            # Reset
             gold_evidences = []
-            if index + 1 < len(raw_data):
-                current_question_id = raw_data[index+1].question.id()
+            if not is_last_item:
+                current_qid = raw_data[index+1].question.id()
+            
+            if processed_count % 50 == 0:
+                print(f"k={k_noise} | EM: {matches/processed_count:.4f} | Processed: {processed_count}/1200")
 
-        # Final Save for this level
-        final_em = matches / len(question_df['questions'])
-        print(f"FINISHED HardNeg k={k_noise} | Final EM: {final_em:.4f}")
-        pd.DataFrame(question_df).to_csv(f"gemma3_hardneg_k{k_noise}.tsv", sep="\t", index=False)
-
-    print("\nALL HARD NEGATIVE EXPERIMENTS COMPLETE.")
-
+        print(f"FINISHED k={k_noise} | Final EM: {matches/processed_count:.4f}")
