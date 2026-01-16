@@ -71,44 +71,34 @@ Comprehensive analysis of how noise affects answer quality:
 ```
 DEXTER/
 ├── dexter/                              # Core library
-│   ├── config/                          # Configuration
-│   │   ├── constants.py                 # Dataset & split constants
-│   │   └── __init__.py
+│   ├── config/                          # Configuration constants
 │   ├── data/                            # Data structures & loaders
-│   │   ├── datastructures/              # Core data classes
-│   │   │   ├── answer.py                # Answer class
-│   │   │   ├── dataset.py               # Dataset classes
-│   │   │   ├── evidence.py              # Document/Evidence class
-│   │   │   ├── question.py              # Question class
-│   │   │   └── sample.py                # Sample (Q+A+Evidence)
-│   │   └── loaders/                     # Dataset loaders
-│   │       ├── BaseDataLoader.py        # Base class
-│   │       ├── DataLoaderFactory.py     # Factory pattern
-│   │       ├── RetrieverDataset.py      # Main loader
-│   │       ├── WikiMultihopQADataLoader.py
-│   │       ├── MusiqueQaDataLoader.py
-│   │       └── Tokenizer.py
-│   └── llms/                            # LLM engines
-│       ├── gemma_ollama_engine.py       # Gemma via Ollama
-│       └── __init__.py
+│   │   ├── datastructures/              # Core data classes (Answer, Question, Evidence, Sample)
+│   │   └── loaders/                     # Dataset loaders (WikiMultiHopQA, Musique)
+│   ├── llms/                            # LLM engines
+│   │   ├── gemma_ollama_engine.py       # Gemma 3 4B via Ollama backend
+│   │   └── __init__.py
+│   ├── retriever/                       # Dense retriever implementations
+│   └── utils/                           # Utility functions & metrics
+│       └── metrics/
+│           └── ExactMatch.py            # Exact Match evaluation metric
 │
-├── evaluation/                          # Evaluation scripts
+├── evaluation/                          # Evaluation scripts & data
 │   ├── config.ini                       # Data paths configuration
 │   ├── data/                            # Dataset files
 │   │   └── musiqueqa/                   # 2WikiMultiHopQA dataset
 │   │       ├── dev.json                 # Questions & annotations
 │   │       └── wiki_musique_corpus.json # Document corpus
-│   └── wikimultihop/                    # Evaluation scripts
-│       ├── run_oracle_gemma3_ollama.py      # Experiment 2
-│       ├── run_noise_experiment.py          # Experiment 3
-│       └── run_hard_negatives_experiment.py # Experiment 4
+│   └── wikimultihop/                    # Experiment scripts
+│       ├── run_oracle_gemma3_ollama.py      # Experiment 2: Oracle contexts
+│       ├── run_noise_experiment.py          # Experiment 3: Random noise injection
+│       └── run_hard_negatives_experiment.py # Experiment 4: Hard negative injection
 │
-├── results/                             # Experiment results
-│   ├── Experiment_1/                    # RAG baseline experiments
+├── results/                             # Experiment outputs & analysis
 │   ├── Experiment_2/                    # Oracle context results
 │   ├── Experiment_3/                    # Noise injection results
-│   ├── Experiment_4/                    # Hard negative injection results
-│   └── extented_analysis.py             # Analysis script
+│   ├── Experiment_4/                    # Hard negative results
+│   └── churn_analysis.py                # Comprehensive analysis script
 │
 ├── setup.py                             # Package installation
 ├── LICENSE.md                           # Apache 2.0 license
