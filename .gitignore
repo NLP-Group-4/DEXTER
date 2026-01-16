@@ -10,7 +10,7 @@ evaluation/data/wikimultihopqa/*.json
 *.pkl
 
 # Generated results
-*.tsv
+.tsv
 experiment*.json
 processed_questions.pkl
 
