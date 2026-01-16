@@ -48,11 +48,11 @@ Injects randomly sampled irrelevant documents as noise into the LLM input contex
 ### Experiment 4: Hard Negative Injection
 **Script**: [`evaluation/wikimultihop/run_hard_negatives_experiment.py`](evaluation/wikimultihop/run_hard_negatives_experiment.py)
 
-Evaluates RAG robustness when ground-truth evidence is combined with hard negatives retrieved via dense retrieval. Unlike random noise, hard negatives are retriever-based and semantically similar to the query, making this experiment a realistic test to understand if hard negatives improve RAG performance compared to random documents.
+Evaluates the robustness of RAG systems when ground-truth evidence is combined with hard negatives retrieved via dense retrieval. Unlike random noise, these hard negatives are retriever-based and semantically similar to the query, making this an informative setting for analyzing performance degradation compared to randomly injected noise.
 
 - **Model**: Gemma 3 4B (via Ollama)
 - **Hard Negative levels**: k = 1, 3, 5 hard negatives
-- **Method**: Bootstraps dense retrieval (Contriever) to build a high-recall reduced corpus, followed by final retrieval. Combines gold evidence with retrieved hard negatives, shuffled to prevent positional bias.
+- **Method**: For each question, all gold evidence passages are aggregated and combined with k hard negatives retrieved using a dense retriever (Contriever). Hard negatives are selected from the top retrieved documents after filtering out gold evidence. The combined context is randomly shuffled to prevent positional bias.
 - **Results**: [`results/Experiment_4/`](results/Experiment_4/)
 
 ### Analysis: Extended Churn Analysis
@@ -99,13 +99,15 @@ DEXTER/
 │   │       ├── dev.json                 # Questions & annotations
 │   │       └── wiki_musique_corpus.json # Document corpus
 │   └── wikimultihop/                    # Evaluation scripts
-│       ├── run_oracle_gemma3_ollama.py  # Experiment 2
-│       └── run_noise_experiment.py      # Experiment 3
+│       ├── run_oracle_gemma3_ollama.py      # Experiment 2
+│       ├── run_noise_experiment.py          # Experiment 3
+│       └── run_hard_negatives_experiment.py # Experiment 4
 │
 ├── results/                             # Experiment results
 │   ├── Experiment_1/                    # RAG baseline experiments
 │   ├── Experiment_2/                    # Oracle context results
 │   ├── Experiment_3/                    # Noise injection results
+│   ├── Experiment_4/                    # Hard negative injection results
 │   └── extented_analysis.py             # Analysis script
 │
 ├── setup.py                             # Package installation
@@ -199,6 +201,17 @@ python evaluation/wikimultihop/run_noise_experiment.py
 - `results/Experiment_3/gemma3_noise_k1.tsv`
 - `results/Experiment_3/gemma3_noise_k3.tsv`
 - `results/Experiment_3/gemma3_noise_k5.tsv`
+
+### Experiment 4: Hard Negatives Injection
+
+```bash
+python evaluation/wikimultihop/run_hard_negatives_experiment.py
+```
+
+**Output**: 
+- `results/Experiment_4/gemma3_hardneg_k1.tsv`
+- `results/Experiment_4/gemma3_hardneg_k3.tsv`
+- `results/Experiment_4/gemma3_hardneg_k5.tsv`
 
 ### Analysis
 
